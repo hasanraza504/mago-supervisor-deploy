@@ -8,10 +8,11 @@
 # distribution certificate and provisioning profile exist only for the life of
 # the job. The .p12 is never written to the repo and never printed.
 #
-# ARTIFACTS ARE PUBLIC. Actions artifacts on a public repo can be downloaded by
-# anyone who can see the run, and an IPA embeds the whole JS bundle. The
-# artifact is therefore encrypted before upload:
-#   openssl enc -d -aes-256-cbc -pbkdf2 -in app.ipa.enc -out app.ipa -pass pass:'<ARTIFACT_PASSPHRASE>'
+# WHERE THE BUILD GOES
+# Actions artifacts on a PUBLIC repo are downloadable by anyone who can see the
+# run, and an IPA embeds the whole JS bundle. So nothing is published here: the
+# build is pushed to private OneDrive storage under
+# /onedrive/app-builds/<app>/<platform>/ and needs no passphrase.
 #
 # NOTE: an IPA signed with an App Store distribution certificate will NOT
 # install directly on a device. For a build you can sideload, use an ad-hoc or
@@ -117,35 +118,53 @@ jobs:
             --output "$RUNNER_TEMP/app.ipa"
           ls -lh "$RUNNER_TEMP/app.ipa"
 
-      - name: Encrypt the artifact
+      - name: Upload to OneDrive
+        # The artifact goes to private cloud storage instead of GitHub Actions
+        # artifacts, which on a PUBLIC repo are downloadable by anyone. Nothing
+        # is published from this repo, so the binary needs no passphrase.
         env:
-          PASSPHRASE: ${{ secrets.ARTIFACT_PASSPHRASE }}
+          RCLONE_CONF: ${{ secrets.RCLONE_CONFIG_ONEDRIVE }}
+          EXT: ipa
+          SRC_SHA: ${{ inputs.ref }}
         run: |
           set -euo pipefail
-          if [ -z "${PASSPHRASE:-}" ]; then
-            echo "::error::ARTIFACT_PASSPHRASE is unset. Refusing to publish an unencrypted signed binary to a public repo."
+          if [ -z "${RCLONE_CONF:-}" ]; then
+            echo "::error::RCLONE_CONFIG_ONEDRIVE is unset — refusing to finish with nowhere to put the build."
             exit 1
           fi
-          openssl enc -aes-256-cbc -pbkdf2 -salt \
-            -in "$RUNNER_TEMP/app.ipa" \
-            -out "$RUNNER_TEMP/app.ipa.enc" \
-            -pass env:PASSPHRASE
-          ( cd "$RUNNER_TEMP" && shasum -a 256 app.ipa > sha256.txt && cat sha256.txt )
-          cat > "$RUNNER_TEMP/HOW-TO-DECRYPT.txt" <<'EOF'
-          openssl enc -d -aes-256-cbc -pbkdf2 -in app.ipa.enc -out app.ipa -pass pass:'<ARTIFACT_PASSPHRASE>'
-          shasum -a 256 app.ipa   # must match sha256.txt
-          EOF
+          curl -fsSL https://rclone.org/install.sh | sudo bash >/dev/null 2>&1 || {
+            echo "::error::rclone install failed"; exit 1; }
 
-      - name: Upload the build
-        uses: actions/upload-artifact@v4
-        with:
-          name: ios-ipa-${{ github.run_number }}
-          path: |
-            ${{ runner.temp }}/app.ipa.enc
-            ${{ runner.temp }}/sha256.txt
-            ${{ runner.temp }}/HOW-TO-DECRYPT.txt
-          retention-days: 30
-          if-no-files-found: error
+          # sha256 used to be produced by the (now removed) encrypt step.
+          ( cd "$RUNNER_TEMP" && shasum -a 256 "app.${EXT}" > sha256.txt && cat sha256.txt )
+
+          conf="$RUNNER_TEMP/rclone.conf"
+          printf '%s' "$RCLONE_CONF" > "$conf"
+          chmod 600 "$conf"
+
+          # Repo is <app>-deploy; the OneDrive folder is <app>.
+          app="${GITHUB_REPOSITORY##*/}"; app="${app%-deploy}"
+          # Stamp the file so builds are self-describing in the folder listing.
+          stamp="$(date -u +%Y%m%d-%H%M)"
+          name="${app}-ios-${stamp}-run${GITHUB_RUN_NUMBER}.${EXT}"
+
+          rclone --config "$conf" copyto "$RUNNER_TEMP/app.${EXT}" \
+            "builds:${app}/ios/${name}" --no-traverse
+          rclone --config "$conf" copyto "$RUNNER_TEMP/sha256.txt" \
+            "builds:${app}/ios/${name}.sha256" --no-traverse
+          rm -f "$conf"
+
+          {
+            echo "### Build uploaded"
+            echo ""
+            echo "| | |"
+            echo "|---|---|"
+            echo "| file | \`${name}\` |"
+            echo "| OneDrive | \`/onedrive/app-builds/${app}/ios/\` |"
+            echo "| source ref | \`${SRC_SHA}\` |"
+            echo "| sha256 | \`$(cut -d" " -f1 "$RUNNER_TEMP/sha256.txt")\` |"
+          } >> "$GITHUB_STEP_SUMMARY"
+          echo "uploaded ${name}"
 
       - name: Scrub credentials from the runner
         if: always()

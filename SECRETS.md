@@ -21,7 +21,7 @@ there.
 |---|---|
 | `SOURCE_REPO_SSH_KEY` | Private half of a **read-only deploy key** on `InstaFarms/mago-supervisor` |
 | `EXPO_TOKEN` | Expo access token (`expo.dev` → Account → Access tokens) |
-| `ARTIFACT_PASSPHRASE` | Any long random string; used to encrypt the built binary |
+| `RCLONE_CONFIG_ONEDRIVE` | An rclone config whose `[builds]` remote is pinned to the OneDrive `app-builds` folder |
 
 ### `android` branch
 
@@ -53,6 +53,18 @@ eas credentials            # choose the platform, then "Download credentials"
 
 For Android this yields the keystore plus its passwords and alias. For iOS it
 yields the distribution certificate (`.p12`) and provisioning profile.
+
+## The OneDrive remote
+
+`RCLONE_CONFIG_ONEDRIVE` holds a complete rclone config with a single `[builds]`
+remote. Its `root_folder_id` pins the remote to `/onedrive/app-builds`, so the
+workflow can only see and write that subtree.
+
+Be aware of what that does and does not buy you: `root_folder_id` constrains
+**this client**, not the token. The underlying OAuth token is a delegated
+OneDrive-for-Business token and is not scoped server-side, so anyone holding it
+could point a different config at the rest of the drive. It is defence in depth,
+not a permission boundary — keep the secret tight and rotate it if in doubt.
 
 ## The deploy key
 
