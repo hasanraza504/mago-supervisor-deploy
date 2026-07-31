@@ -1,0 +1,168 @@
+# Android build — free public-repo runners; produces a downloadable AAB or APK.
+#
+# The app source lives in a PRIVATE repo. It is cloned into the runner at build
+# time with a READ-ONLY deploy key, built, and destroyed with the runner.
+# Nothing from it is ever committed here, and only the explicitly named artifact
+# paths are uploaded, so the cloned tree cannot leak that way.
+#
+# Signing is injected as an EAS `credentials.json` written from secrets at run
+# time, so `eas build --local` signs without fetching credentials from EAS and
+# without a keystore living in git. Local builds consume no EAS build credits.
+#
+# ARTIFACTS ARE PUBLIC. Actions artifacts on a public repo can be downloaded by
+# anyone who can see the run, and a signed AAB embeds the whole JS bundle plus
+# every EXPO_PUBLIC_* value. The artifact is therefore encrypted before upload:
+#   openssl enc -d -aes-256-cbc -pbkdf2 -in app.aab.enc -out app.aab -pass pass:'<ARTIFACT_PASSPHRASE>'
+
+name: Build Android
+
+on:
+  workflow_dispatch:
+    inputs:
+      profile:
+        # Free text, not a choice list: profile names differ per app.
+        description: "EAS build profile (as named in the app's eas.json)"
+        default: production
+      format:
+        description: "Output format"
+        type: choice
+        default: aab
+        options: [aab, apk]
+      ref:
+        description: "Source branch/tag/SHA to build"
+        default: main
+
+permissions:
+  contents: read
+
+concurrency:
+  group: android-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  SRC: src
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - name: Check out the build harness (this repo)
+        uses: actions/checkout@v4
+
+      - name: Check out app source (private, read-only deploy key)
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ vars.SOURCE_REPO }}
+          ref: ${{ inputs.ref }}
+          # A deploy key is scoped to exactly one repository and is read-only,
+          # so a leak cannot reach any other repo or write anywhere.
+          ssh-key: ${{ secrets.SOURCE_REPO_SSH_KEY }}
+          path: ${{ env.SRC }}
+          persist-credentials: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: ${{ env.SRC }}/package-lock.json
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - uses: android-actions/setup-android@v3
+
+      - name: Install dependencies
+        working-directory: ${{ env.SRC }}
+        run: npm ci --no-audit --no-fund
+
+      - name: Write signing credentials from secrets
+        working-directory: ${{ env.SRC }}
+        env:
+          KEYSTORE_B64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          echo "$KEYSTORE_B64" | base64 -d > release.keystore
+          # jq builds the JSON so a password containing a quote or backslash
+          # cannot corrupt the file — and never reaches the log.
+          jq -n \
+            --arg pw "$KEYSTORE_PASSWORD" \
+            --arg alias "$KEY_ALIAS" \
+            --arg keypw "$KEY_PASSWORD" \
+            '{android:{keystore:{keystorePath:"release.keystore",keystorePassword:$pw,keyAlias:$alias,keyPassword:$keypw}}}' \
+            > credentials.json
+          echo "credentials.json $(stat -c%s credentials.json) bytes; keystore $(stat -c%s release.keystore) bytes"
+
+      - name: Point the profile at local credentials and the requested format
+        working-directory: ${{ env.SRC }}
+        env:
+          PROFILE: ${{ inputs.profile }}
+          FORMAT: ${{ inputs.format }}
+        run: |
+          set -euo pipefail
+          # credentialsSource=local keeps signing entirely offline.
+          # buildType must match the requested artifact or --output is ignored.
+          jq --arg p "$PROFILE" --arg f "$FORMAT" '
+            .build[$p].credentialsSource = "local"
+            | .build[$p].android = ((.build[$p].android // {}) + {buildType: (if $f == "apk" then "apk" else "app-bundle" end)})
+          ' eas.json > eas.json.tmp && mv eas.json.tmp eas.json
+          jq ".build[\"$PROFILE\"]" eas.json
+
+      - name: Build with EAS (local — consumes no EAS build credits)
+        working-directory: ${{ env.SRC }}
+        env:
+          EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
+          # The source is a detached checkout; stop EAS resolving a VCS root.
+          EAS_NO_VCS: "1"
+          PROFILE: ${{ inputs.profile }}
+          FORMAT: ${{ inputs.format }}
+        run: |
+          set -euo pipefail
+          npx eas-cli@latest build \
+            --local \
+            --non-interactive \
+            --platform android \
+            --profile "$PROFILE" \
+            --output "$RUNNER_TEMP/app.$FORMAT"
+          ls -lh "$RUNNER_TEMP/app.$FORMAT"
+
+      - name: Encrypt the artifact
+        # See the header: artifacts on a public repo are world-downloadable.
+        env:
+          PASSPHRASE: ${{ secrets.ARTIFACT_PASSPHRASE }}
+          FORMAT: ${{ inputs.format }}
+        run: |
+          set -euo pipefail
+          if [ -z "${PASSPHRASE:-}" ]; then
+            echo "::error::ARTIFACT_PASSPHRASE is unset. Refusing to publish an unencrypted signed binary to a public repo."
+            exit 1
+          fi
+          openssl enc -aes-256-cbc -pbkdf2 -salt \
+            -in "$RUNNER_TEMP/app.$FORMAT" \
+            -out "$RUNNER_TEMP/app.$FORMAT.enc" \
+            -pass env:PASSPHRASE
+          ( cd "$RUNNER_TEMP" && sha256sum "app.$FORMAT" > sha256.txt && cat sha256.txt )
+          cat > "$RUNNER_TEMP/HOW-TO-DECRYPT.txt" <<EOF
+          openssl enc -d -aes-256-cbc -pbkdf2 -in app.$FORMAT.enc -out app.$FORMAT -pass pass:'<ARTIFACT_PASSPHRASE>'
+          sha256sum app.$FORMAT   # must match sha256.txt
+          EOF
+
+      - name: Upload the build
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-${{ inputs.format }}-${{ github.run_number }}
+          path: |
+            ${{ runner.temp }}/app.${{ inputs.format }}.enc
+            ${{ runner.temp }}/sha256.txt
+            ${{ runner.temp }}/HOW-TO-DECRYPT.txt
+          retention-days: 30
+          if-no-files-found: error
+
+      - name: Scrub credentials from the runner
+        if: always()
+        run: rm -f "$SRC/credentials.json" "$SRC/release.keystore" || true
