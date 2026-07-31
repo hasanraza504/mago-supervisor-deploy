@@ -150,5 +150,3 @@ jobs:
       - name: Scrub credentials from the runner
         if: always()
         run: rm -f "$SRC/credentials.json" "$SRC/dist-cert.p12" "$SRC/profile.mobileprovision" || true
-
-# touch to force Actions indexing

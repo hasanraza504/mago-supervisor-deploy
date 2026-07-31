@@ -1,4 +1,4 @@
-# Magostays Supervisor — build harness
+# mago-supervisor — build harness
 
 **This repository contains no application source code, and never should.**
 
@@ -31,8 +31,10 @@ artifact paths it names explicitly.
 | `android` | Build Android | `ubuntu-latest` | `.aab` or `.apk` |
 | `ios` | Build iOS | `macos-15` | `.ipa` |
 
-Each branch carries only its own workflow, so an iOS change cannot break an
-Android build.
+Both workflows are present on both branches. That is not redundancy: GitHub
+only allows `workflow_dispatch` for workflows that exist on the repository's
+DEFAULT branch, so an iOS workflow living solely on `ios` would be invisible and
+un-runnable. The `ios` branch remains the place to edit iOS build logic.
 
 ## Running a build
 
