@@ -1,0 +1,15 @@
+# This repo must never contain application source or credentials.
+*.keystore
+*.jks
+*.p8
+*.p12
+*.mobileprovision
+credentials.json
+google-play-key.json
+.env
+.env.*
+node_modules/
+src/
+*.aab
+*.apk
+*.ipa
