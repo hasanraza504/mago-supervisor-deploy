@@ -1,0 +1,133 @@
+# Poll the private source repo every 30 minutes and start a build when it moves.
+#
+# WHY POLL INSTEAD OF REACTING TO A PUSH
+# The natural design is a workflow in the source repo that pings this one on
+# push. That workflow would have to RUN IN THE SOURCE REPO'S ORG, and that org's
+# Actions are currently blocked ("account is locked due to a billing issue"), so
+# the trigger would never fire. Polling from this account sidesteps that
+# entirely. If the org is ever unblocked, replace this with a repository_dispatch
+# from the source repo and delete the cron — it is strictly better.
+#
+# WHY THIS FILE LIVES ON THE DEFAULT BRANCH
+# GitHub only runs `schedule` triggers from a repository's DEFAULT branch. This
+# workflow therefore sits on `android` and dispatches BOTH platform builds; a
+# copy on `ios` would simply never fire.
+#
+# STATE
+# The last dispatched commit is recorded on the orphan `ci-state` branch. One
+# build per new commit, the same as push-triggered CI: if a build fails, the SHA
+# is already recorded, so fix the code and push again (or dispatch manually) —
+# it will not loop on a broken commit.
+
+name: Poll source
+
+on:
+  schedule:
+    - cron: "*/30 * * * *"
+  workflow_dispatch:
+    inputs:
+      force:
+        description: "Build even if the source has not changed"
+        type: boolean
+        default: false
+
+permissions:
+  contents: write   # to record the built SHA on ci-state
+  actions: write    # to dispatch the build workflows
+
+concurrency:
+  group: poll-source
+  cancel-in-progress: false
+
+jobs:
+  poll:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out ci-state
+        uses: actions/checkout@v4
+        with:
+          ref: ci-state
+          path: state
+          # Keep the token so the state commit can be pushed back.
+          persist-credentials: true
+
+      - name: Read the source HEAD without cloning it
+        id: head
+        env:
+          SSH_KEY: ${{ secrets.SOURCE_REPO_SSH_KEY }}
+          SOURCE_REPO: ${{ vars.SOURCE_REPO }}
+          BRANCH: ${{ vars.SOURCE_BRANCH || 'main' }}
+        run: |
+          set -euo pipefail
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "$SSH_KEY" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          ssh-keyscan -t ed25519 github.com >> ~/.ssh/known_hosts 2>/dev/null
+          # ls-remote is a metadata call: no working tree, no source on disk.
+          sha=$(GIT_SSH_COMMAND="ssh -i ~/.ssh/id_ed25519 -o IdentitiesOnly=yes" \
+                git ls-remote "git@github.com:${SOURCE_REPO}.git" "refs/heads/${BRANCH}" | cut -f1)
+          rm -f ~/.ssh/id_ed25519
+          if [ -z "$sha" ]; then
+            echo "::error::${SOURCE_REPO} has no branch ${BRANCH}"; exit 1
+          fi
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+          echo "branch=$BRANCH" >> "$GITHUB_OUTPUT"
+          echo "source $SOURCE_REPO@$BRANCH is at $sha"
+
+      - name: Decide whether to build
+        id: decide
+        env:
+          NEW: ${{ steps.head.outputs.sha }}
+          FORCE: ${{ inputs.force }}
+        run: |
+          set -euo pipefail
+          old=$(cat state/last-built.sha 2>/dev/null || echo "")
+          echo "last built: ${old:-<none>}"
+          if [ "$FORCE" = "true" ]; then
+            echo "reason=forced" >> "$GITHUB_OUTPUT"; echo "build=true" >> "$GITHUB_OUTPUT"
+          elif [ "$NEW" != "$old" ]; then
+            echo "reason=source moved" >> "$GITHUB_OUTPUT"; echo "build=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "reason=unchanged" >> "$GITHUB_OUTPUT"; echo "build=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Dispatch builds
+        if: steps.decide.outputs.build == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REF: ${{ steps.head.outputs.branch }}
+          # Opt out per platform with a repo variable set to "false".
+          DO_ANDROID: ${{ vars.AUTO_BUILD_ANDROID != 'false' }}
+          DO_IOS: ${{ vars.AUTO_BUILD_IOS != 'false' }}
+        run: |
+          set -euo pipefail
+          echo "building: ${{ steps.decide.outputs.reason }}"
+          if [ "$DO_ANDROID" = "true" ]; then
+            gh workflow run build-android.yml --repo "$GITHUB_REPOSITORY" --ref android \
+              -f profile=production -f format=aab -f ref="$REF"
+            echo "  dispatched Build Android"
+          fi
+          if [ "$DO_IOS" = "true" ]; then
+            gh workflow run build-ios.yml --repo "$GITHUB_REPOSITORY" --ref ios \
+              -f profile=production -f ref="$REF"
+            echo "  dispatched Build iOS"
+          fi
+
+      - name: Record the dispatched SHA
+        if: steps.decide.outputs.build == 'true'
+        working-directory: state
+        env:
+          NEW: ${{ steps.head.outputs.sha }}
+        run: |
+          set -euo pipefail
+          printf '%s\n' "$NEW" > last-built.sha
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add last-built.sha
+          git commit -qm "ci: dispatched build for ${NEW:0:8}"
+          git push -q origin HEAD:ci-state
+
+      - name: Nothing to do
+        if: steps.decide.outputs.build != 'true'
+        run: echo "source unchanged at ${{ steps.head.outputs.sha }} — no build"
