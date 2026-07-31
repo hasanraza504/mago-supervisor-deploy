@@ -17,9 +17,9 @@ gives unlimited iOS and Android builds at no cost.
    `credentials.json` that exists only for the life of the job.
 4. `eas build --local` compiles on the runner. This consumes **no EAS build
    credits** — the build never goes to Expo's servers.
-5. The artifact is encrypted and uploaded as a downloadable build artifact.
-   **Nothing is ever submitted to a store from here** — this harness only
-   produces files.
+5. The build is pushed to **private OneDrive storage**, not to GitHub Actions
+   artifacts. **Nothing is ever submitted to a store from here** — this harness
+   only produces files.
 
 Nothing from the source tree is committed here, and the job only uploads the
 artifact paths it names explicitly.
@@ -45,21 +45,22 @@ Actions → *Build Android* / *Build iOS* → **Run workflow**, then pick:
 - **format** — `aab` or `apk` (Android only)
 - **ref** — the source branch, tag or SHA to build
 
-## Getting the artifact
+## Getting the build
 
-**Artifacts on a public repository can be downloaded by anyone who can see the
-run.** A signed binary embeds the whole JS bundle and every `EXPO_PUBLIC_*`
-value, so artifacts are encrypted before upload and the job fails outright if
-`ARTIFACT_PASSPHRASE` is missing.
+Builds land in OneDrive, not in this repository:
 
-To decrypt:
-
-```bash
-openssl enc -d -aes-256-cbc -pbkdf2 -in app.aab.enc -out app.aab -pass pass:'<ARTIFACT_PASSPHRASE>'
-sha256sum app.aab      # compare against sha256.txt from the same artifact
+```
+/onedrive/app-builds/<app>/<platform>/<app>-<platform>-<UTC stamp>-run<N>.<ext>
 ```
 
-Artifacts are kept for 30 days, then deleted by GitHub automatically.
+A `.sha256` sits beside each file so you can verify the download. The run's
+summary page prints the exact filename and hash.
+
+Nothing is published here on purpose: Actions artifacts on a **public**
+repository are downloadable by anyone who can see the run, and a signed binary
+embeds the whole JS bundle and every `EXPO_PUBLIC_*` value. Sending builds to
+private storage removes that exposure entirely — and means no passphrase to
+juggle.
 
 An iOS build signed with an **App Store distribution** certificate will not
 install directly on a device. If you want a sideloadable IPA, point the run at
