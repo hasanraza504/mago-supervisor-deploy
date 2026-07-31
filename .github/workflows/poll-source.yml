@@ -125,8 +125,16 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add last-built.sha
-          git commit -qm "ci: dispatched build for ${NEW:0:8}"
-          git push -q origin HEAD:ci-state
+          # A forced run re-dispatches the SAME sha, so there is nothing to
+          # commit — that is success, not failure.
+          if git diff --cached --quiet; then
+            echo "state already at ${NEW:0:8} (forced rebuild) — nothing to record"
+          else
+            git commit -qm "ci: dispatched build for ${NEW:0:8}"
+            # ci-state can move between checkout and push if two polls overlap.
+            git pull -q --rebase origin ci-state || true
+            git push -q origin HEAD:ci-state
+          fi
 
       - name: Nothing to do
         if: steps.decide.outputs.build != 'true'
