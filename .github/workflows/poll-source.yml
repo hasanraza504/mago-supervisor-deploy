@@ -1,4 +1,4 @@
-# Poll the private source repo every 30 minutes and start a build when it moves.
+# Poll the private source repo every 15 minutes and start a build when it moves.
 #
 # WHY POLL INSTEAD OF REACTING TO A PUSH
 # The natural design is a workflow in the source repo that pings this one on
@@ -23,7 +23,10 @@ name: Poll source
 
 on:
   schedule:
-    - cron: "*/30 * * * *"
+    # Every 15 minutes. GitHub schedules are best-effort and drift under load,
+    # so treat this as "about every quarter hour", not a guarantee. A run that
+    # finds no change costs ~15s, so the idle cost is negligible.
+    - cron: "*/15 * * * *"
   workflow_dispatch:
     inputs:
       force:
