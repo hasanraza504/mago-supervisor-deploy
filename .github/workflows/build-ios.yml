@@ -74,9 +74,11 @@ jobs:
         run: |
           set -euo pipefail
           stamp="$(TZ=Asia/Kolkata date '+%Y%m%d-%H%M-IST')"
+          source_revision="$(git -C "$SRC" rev-parse --short HEAD)"
           echo "APP_RELEASE_STAMP=$stamp" >> "$GITHUB_ENV"
           echo "EXPO_PUBLIC_RELEASE_STAMP=$stamp" >> "$GITHUB_ENV"
-          echo "EAS_BUILD_MESSAGE=release $stamp (run $GITHUB_RUN_NUMBER)" >> "$GITHUB_ENV"
+          echo "APP_RELEASE_SOURCE_REVISION=$source_revision" >> "$GITHUB_ENV"
+          echo "EAS_BUILD_MESSAGE=release $stamp ($source_revision)" >> "$GITHUB_ENV"
 
       - uses: actions/setup-node@v4
         with:
@@ -142,6 +144,7 @@ jobs:
           PROFILE: ${{ inputs.profile }}
           APP_RELEASE_STAMP: ${{ env.APP_RELEASE_STAMP }}
           EXPO_PUBLIC_RELEASE_STAMP: ${{ env.EXPO_PUBLIC_RELEASE_STAMP }}
+          APP_RELEASE_SOURCE_REVISION: ${{ env.APP_RELEASE_SOURCE_REVISION }}
           EAS_BUILD_MESSAGE: ${{ env.EAS_BUILD_MESSAGE }}
           # SDK 56 turns on Expo's precompiled xcframeworks by default. Under
           # `eas build --local` there is no EAS cache, so every tarball is
