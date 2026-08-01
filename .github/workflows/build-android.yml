@@ -62,6 +62,16 @@ jobs:
           path: ${{ env.SRC }}
           persist-credentials: false
 
+      - name: Set IST release metadata
+        run: |
+          set -euo pipefail
+          stamp="$(TZ=Asia/Kolkata date '+%Y%m%d-%H%M-IST')"
+          source_revision="$(git -C "$SRC" rev-parse --short HEAD)"
+          echo "APP_RELEASE_STAMP=$stamp" >> "$GITHUB_ENV"
+          echo "EXPO_PUBLIC_RELEASE_STAMP=$stamp" >> "$GITHUB_ENV"
+          echo "APP_RELEASE_SOURCE_REVISION=$source_revision" >> "$GITHUB_ENV"
+          echo "EAS_BUILD_MESSAGE=release $stamp ($source_revision)" >> "$GITHUB_ENV"
+
       - uses: actions/setup-node@v4
         with:
           node-version: 20
@@ -88,6 +98,10 @@ jobs:
           KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
         run: |
           set -euo pipefail
+          : "${KEYSTORE_B64:?ANDROID_KEYSTORE_BASE64 is required}"
+          : "${KEYSTORE_PASSWORD:?ANDROID_KEYSTORE_PASSWORD is required}"
+          : "${KEY_ALIAS:?ANDROID_KEY_ALIAS is required}"
+          : "${KEY_PASSWORD:?ANDROID_KEY_PASSWORD is required}"
           echo "$KEYSTORE_B64" | base64 -d > release.keystore
           # jq builds the JSON so a password containing a quote or backslash
           # cannot corrupt the file — and never reaches the log.
@@ -122,6 +136,10 @@ jobs:
           EAS_NO_VCS: "1"
           PROFILE: ${{ inputs.profile }}
           FORMAT: ${{ inputs.format }}
+          APP_RELEASE_STAMP: ${{ env.APP_RELEASE_STAMP }}
+          EXPO_PUBLIC_RELEASE_STAMP: ${{ env.EXPO_PUBLIC_RELEASE_STAMP }}
+          APP_RELEASE_SOURCE_REVISION: ${{ env.APP_RELEASE_SOURCE_REVISION }}
+          EAS_BUILD_MESSAGE: ${{ env.EAS_BUILD_MESSAGE }}
         run: |
           set -euo pipefail
           npx eas-cli@latest build \
@@ -129,6 +147,7 @@ jobs:
             --non-interactive \
             --platform android \
             --profile "$PROFILE" \
+            --message "$EAS_BUILD_MESSAGE" \
             --output "$RUNNER_TEMP/app.$FORMAT"
           ls -lh "$RUNNER_TEMP/app.$FORMAT"
 
@@ -159,7 +178,7 @@ jobs:
           # Repo is <app>-deploy; the OneDrive folder is <app>.
           app="${GITHUB_REPOSITORY##*/}"; app="${app%-deploy}"
           # Stamp the file so builds are self-describing in the folder listing.
-          stamp="$(date -u +%Y%m%d-%H%M)"
+          stamp="$APP_RELEASE_STAMP"
           name="${app}-android-${stamp}-run${GITHUB_RUN_NUMBER}.${EXT}"
 
           rclone --config "$conf" copyto "$RUNNER_TEMP/app.${EXT}" \
