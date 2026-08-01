@@ -48,12 +48,12 @@ jobs:
     # Standard macOS runners are free for PUBLIC repositories — this is the
     # whole reason the harness lives in a separate public repo.
     #
-    # The image is a repo variable because the apps need different Xcodes:
-    # SDK 54 apps build fine on macos-15 (Xcode 16.4), but SDK 56 pulls
-    # expo-modules-jsi whose Package.swift declares swift-tools-version 6.2,
-    # which Xcode 16.4's SwiftPM cannot parse. Set MACOS_RUNNER=macos-26 for
-    # those. Default stays macos-15 so working builds are not disturbed.
-    runs-on: ${{ vars.MACOS_RUNNER || 'macos-15' }}
+    # macos-26 (Xcode 26.6 / Swift 6.3) for every app. macos-15 only carries
+    # Xcode 16.4 / Swift 6.1, and expo-modules-jsi on SDK 56 ships a
+    # Package.swift declaring swift-tools-version 6.2 — its SwiftPM cannot parse
+    # that, and the failure surfaces only as the opaque "Could not resolve
+    # package dependencies" during the ExpoModulesJSI archive script.
+    runs-on: macos-26
     timeout-minutes: 120
     steps:
       - name: Check out the build harness (this repo)
