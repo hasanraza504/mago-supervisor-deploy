@@ -108,6 +108,17 @@ jobs:
           EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
           EAS_NO_VCS: "1"
           PROFILE: ${{ inputs.profile }}
+          # SDK 56 turns on Expo's precompiled xcframeworks by default. Under
+          # `eas build --local` there is no EAS cache, so every tarball is
+          # reported "prebuilt xcframework unavailable; building from source" —
+          # and the from-source path for ExpoModulesJSI then needs SwiftPM
+          # dependency resolution that fails in the archive phase:
+          #   PhaseScriptExecution [CP-User] Build ExpoModulesJSI xcframework
+          #   Could not resolve package dependencies
+          # precompiled_modules.rb enables the feature only when this is exactly
+          # "1", so "0" forces the ordinary from-source build for every module.
+          # Harmless on SDK 54 apps, which never read it.
+          EXPO_USE_PRECOMPILED_MODULES: "0"
         run: |
           set -euo pipefail
           npx eas-cli@latest build \
