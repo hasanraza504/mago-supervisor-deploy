@@ -47,7 +47,13 @@ jobs:
   build:
     # Standard macOS runners are free for PUBLIC repositories — this is the
     # whole reason the harness lives in a separate public repo.
-    runs-on: macos-15
+    #
+    # The image is a repo variable because the apps need different Xcodes:
+    # SDK 54 apps build fine on macos-15 (Xcode 16.4), but SDK 56 pulls
+    # expo-modules-jsi whose Package.swift declares swift-tools-version 6.2,
+    # which Xcode 16.4's SwiftPM cannot parse. Set MACOS_RUNNER=macos-26 for
+    # those. Default stays macos-15 so working builds are not disturbed.
+    runs-on: ${{ vars.MACOS_RUNNER || 'macos-15' }}
     timeout-minutes: 120
     steps:
       - name: Check out the build harness (this repo)
@@ -69,6 +75,21 @@ jobs:
           node-version: 20
           cache: npm
           cache-dependency-path: ${{ env.SRC }}/package-lock.json
+
+      - name: Select the newest Xcode and report Swift
+        # Fastlane otherwise takes /Applications/Xcode.app, which is not always
+        # the newest installed. Pick the highest version explicitly and print
+        # the Swift version, so a tools-version mismatch is obvious in the log
+        # instead of surfacing as "Could not resolve package dependencies".
+        run: |
+          set -euo pipefail
+          ls -d /Applications/Xcode*.app
+          newest=$(ls -d /Applications/Xcode_*.app 2>/dev/null | sort -V | tail -1)
+          newest=${newest:-/Applications/Xcode.app}
+          sudo xcode-select -s "$newest"
+          echo "selected: $newest"
+          xcodebuild -version
+          swift --version
 
       - name: Install dependencies
         working-directory: ${{ env.SRC }}
