@@ -19,6 +19,7 @@
 # enterprise profile in the chosen eas.json profile.
 
 name: Build iOS
+run-name: "Build iOS · ${{ inputs.correlation || 'manual' }}"
 
 on:
   workflow_dispatch:
@@ -32,6 +33,13 @@ on:
       ref:
         description: "Source branch/tag/SHA to build"
         default: main
+      correlation:
+        # Stamped into run-name so the client that dispatched this build can
+        # find it again. workflow_dispatch returns 204 with no body, so without
+        # this the only way to identify the run is "the newest one", which
+        # races whenever two builds start together.
+        description: "Correlation id (set by tools/buildkit; leave blank when dispatching by hand)"
+        default: ""
 
 permissions:
   contents: read
