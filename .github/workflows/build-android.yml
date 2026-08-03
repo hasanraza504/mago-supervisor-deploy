@@ -128,11 +128,15 @@ jobs:
           FORMAT: ${{ inputs.format }}
         run: |
           set -euo pipefail
-          # credentialsSource=local keeps signing entirely offline.
+          # credentialsSource=local keeps signing entirely offline. It has to be
+          # set on the ANDROID block as well as the profile: the platform-nested
+          # value wins, so an app whose eas.json says android.credentialsSource
+          # = "remote" ignored the profile-level patch, went to EAS for a key,
+          # found none for its package, and had one minted mid-build.
           # buildType must match the requested artifact or --output is ignored.
           jq --arg p "$PROFILE" --arg f "$FORMAT" '
             .build[$p].credentialsSource = "local"
-            | .build[$p].android = ((.build[$p].android // {}) + {buildType: (if $f == "apk" then "apk" else "app-bundle" end)})
+            | .build[$p].android = ((.build[$p].android // {}) + {buildType: (if $f == "apk" then "apk" else "app-bundle" end), credentialsSource: "local"})
           ' eas.json > eas.json.tmp && mv eas.json.tmp eas.json
           jq ".build[\"$PROFILE\"]" eas.json
 
@@ -158,6 +162,33 @@ jobs:
             --message "$EAS_BUILD_MESSAGE" \
             --output "$RUNNER_TEMP/app.$FORMAT"
           ls -lh "$RUNNER_TEMP/app.$FORMAT"
+
+      - name: Verify the artifact carries the expected signing key
+        # EAS mints a brand-new keystore, without failing, when it is asked for
+        # remote credentials for a package that has none. That is how an AAB was
+        # produced for a renamed package signed with a certificate Play had never
+        # seen — nothing upstream noticed until the Play Console rejected it.
+        # Comparing the certificate here costs a second and turns that into a
+        # build failure instead of a failed release.
+        env:
+          EXPECTED: ${{ vars.EXPECTED_SIGNING_SHA1 }}
+          FORMAT: ${{ inputs.format }}
+        run: |
+          set -euo pipefail
+          if [ -z "${EXPECTED:-}" ]; then
+            echo "::error::EXPECTED_SIGNING_SHA1 is not set on this repository. Refusing to publish an artifact whose signing identity nobody has declared."
+            exit 1
+          fi
+          actual=$(keytool -printcert -jarfile "$RUNNER_TEMP/app.$FORMAT" \
+                     | grep -m1 'SHA1:' | tr -d ' \t' | cut -d: -f2- | tr 'a-f' 'A-F')
+          want=$(printf '%s' "$EXPECTED" | tr -d ' \t' | tr 'a-f' 'A-F')
+          echo "expected  $want"
+          echo "actual    $actual"
+          if [ "$actual" != "$want" ]; then
+            echo "::error::Signing key mismatch. Play will reject this upload: expected $want, built $actual."
+            exit 1
+          fi
+          echo "signing certificate matches the key Play knows"
 
       - name: Upload to OneDrive
         # The artifact goes to private cloud storage instead of GitHub Actions
