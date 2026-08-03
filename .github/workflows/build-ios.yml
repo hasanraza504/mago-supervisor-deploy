@@ -140,7 +140,15 @@ jobs:
           PROFILE: ${{ inputs.profile }}
         run: |
           set -euo pipefail
-          jq --arg p "$PROFILE" '.build[$p].credentialsSource = "local"' eas.json > eas.json.tmp
+          # credentialsSource has to be set on the IOS block as well as the
+          # profile: the platform-nested value wins, so an app whose eas.json
+          # says ios.credentialsSource = "remote" ignores the profile-level
+          # patch and signs with whatever EAS holds rather than the certificate
+          # and profile this repo was given.
+          jq --arg p "$PROFILE" '
+            .build[$p].credentialsSource = "local"
+            | .build[$p].ios = ((.build[$p].ios // {}) + {credentialsSource: "local"})
+          ' eas.json > eas.json.tmp
           mv eas.json.tmp eas.json
           jq ".build[\"$PROFILE\"]" eas.json
 
@@ -175,6 +183,43 @@ jobs:
             --message "$EAS_BUILD_MESSAGE" \
             --output "$RUNNER_TEMP/app.ipa"
           ls -lh "$RUNNER_TEMP/app.ipa"
+
+      - name: Verify the archive carries the expected signing identity
+        # The Android side of this harness shipped an artifact signed with a key
+        # the store had never seen, because nothing compared the built binary
+        # against the identity the repo was configured with. Same check here:
+        # the embedded profile must be for this app and this team, and the
+        # certificate must be the one whose private key we supplied.
+        env:
+          EXPECTED_APP_ID: ${{ vars.EXPECTED_IOS_APP_ID }}
+          EXPECTED_CERT_SERIAL: ${{ vars.EXPECTED_IOS_CERT_SERIAL }}
+        run: |
+          set -euo pipefail
+          if [ -z "${EXPECTED_APP_ID:-}" ] || [ -z "${EXPECTED_CERT_SERIAL:-}" ]; then
+            echo "::error::EXPECTED_IOS_APP_ID / EXPECTED_IOS_CERT_SERIAL are not set on this repository. Refusing to publish an archive whose signing identity nobody has declared."
+            exit 1
+          fi
+          work="$RUNNER_TEMP/verify"; rm -rf "$work"; mkdir -p "$work"
+          unzip -o -q "$RUNNER_TEMP/app.ipa" 'Payload/*/embedded.mobileprovision' -d "$work"
+          prov=$(find "$work" -name embedded.mobileprovision | head -1)
+          if [ -z "$prov" ]; then
+            echo "::error::no embedded.mobileprovision in the archive - it is not signed for distribution."
+            exit 1
+          fi
+          identity=$(openssl smime -inform der -verify -noverify -in "$prov" 2>/dev/null             | python3 -c "import plistlib,subprocess,sys; p=plistlib.loads(sys.stdin.buffer.read()); c=p['DeveloperCertificates'][0]; s=subprocess.run(['openssl','x509','-inform','der','-noout','-serial'],input=c,capture_output=True).stdout.decode().split('=')[1].strip(); print(p['Entitlements']['application-identifier'], s)")
+          app_id="${identity%% *}"
+          serial="${identity##* }"
+          echo "expected  $EXPECTED_APP_ID  $EXPECTED_CERT_SERIAL"
+          echo "actual    $app_id  $serial"
+          if [ "$app_id" != "$EXPECTED_APP_ID" ]; then
+            echo "::error::Provisioning profile is for $app_id, not $EXPECTED_APP_ID - this archive would go to the wrong App Store record."
+            exit 1
+          fi
+          if [ "$serial" != "$EXPECTED_CERT_SERIAL" ]; then
+            echo "::error::Signed with certificate $serial, expected $EXPECTED_CERT_SERIAL."
+            exit 1
+          fi
+          echo "signing identity matches the certificate and profile Apple knows"
 
       - name: Upload to OneDrive
         # The artifact goes to private cloud storage instead of GitHub Actions
