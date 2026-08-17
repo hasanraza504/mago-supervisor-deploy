@@ -132,7 +132,7 @@ jobs:
           PROFILE: ${{ inputs.profile }}
         run: |
           set -euo pipefail
-          jq --arg p "$PROFILE" '.build[$p].credentialsSource = "local"' eas.json > eas.json.tmp
+          jq --arg p "$PROFILE" '.build[$p].ios.credentialsSource = "local"' eas.json > eas.json.tmp
           mv eas.json.tmp eas.json
           jq ".build[\"$PROFILE\"]" eas.json
 
