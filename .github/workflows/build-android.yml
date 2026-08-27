@@ -231,8 +231,8 @@ jobs:
             actual=$(printf '%s\n' "$apk_cert_output" \
               | awk '
                   tolower($0) ~ /sha-?1[[:space:]]+digest:/ && value == "" {
-                    separator = index($0, ":")
-                    if (separator > 0) value = substr($0, separator + 1)
+                    lower = tolower($0)
+                    if (match(lower, /digest:[[:space:]]*/)) value = substr($0, RSTART + RLENGTH)
                   }
                   END {
                     gsub(/[^0-9A-Fa-f]/, "", value)
