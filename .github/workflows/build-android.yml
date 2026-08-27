@@ -193,8 +193,12 @@ jobs:
               exit 1
             fi
             actual=$("$apksigner_bin" verify --print-certs "$RUNNER_TEMP/app.$FORMAT" \
-                       | awk -F': ' '/certificate SHA-1 digest:/ { print $2; exit }' \
+                       | awk '/SHA-1 digest:/ { sub(/^.*SHA-1 digest:[[:space:]]*/, ""); print; exit }' \
                        | tr -d ' \t' | tr 'a-f' 'A-F')
+            if ! [[ "$actual" =~ ^[0-9A-F]{2}(:[0-9A-F]{2}){19}$ ]]; then
+              echo "::error::Could not read a SHA-1 signing digest from apksigner output."
+              exit 1
+            fi
           else
             actual=$(keytool -printcert -jarfile "$RUNNER_TEMP/app.$FORMAT" \
                        | grep -m1 'SHA1:' | tr -d ' \t' | cut -d: -f2- | tr 'a-f' 'A-F')
