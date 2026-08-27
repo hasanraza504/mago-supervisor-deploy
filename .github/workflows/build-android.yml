@@ -179,8 +179,26 @@ jobs:
             echo "::error::EXPECTED_SIGNING_SHA1 is not set on this repository. Refusing to publish an artifact whose signing identity nobody has declared."
             exit 1
           fi
-          actual=$(keytool -printcert -jarfile "$RUNNER_TEMP/app.$FORMAT" \
-                     | grep -m1 'SHA1:' | tr -d ' \t' | cut -d: -f2- | tr 'a-f' 'A-F')
+          # APKs use Android's v2/v3 signing block, which keytool's JAR verifier
+          # cannot inspect. AABs are ZIP/JAR artifacts, so keytool remains the
+          # correct verifier there. Using the right verifier for each format
+          # prevents a correctly signed APK from being discarded after build.
+          if [ "$FORMAT" = "apk" ]; then
+            apksigner_bin="$(command -v apksigner || true)"
+            if [ -z "$apksigner_bin" ]; then
+              apksigner_bin="$(find "$ANDROID_HOME/build-tools" -type f -name apksigner | sort -V | tail -n1)"
+            fi
+            if [ -z "$apksigner_bin" ] || [ ! -x "$apksigner_bin" ]; then
+              echo "::error::apksigner is unavailable; cannot verify the APK signing certificate."
+              exit 1
+            fi
+            actual=$("$apksigner_bin" verify --print-certs "$RUNNER_TEMP/app.$FORMAT" \
+                       | awk -F': ' '/certificate SHA-1 digest:/ { print $2; exit }' \
+                       | tr -d ' \t' | tr 'a-f' 'A-F')
+          else
+            actual=$(keytool -printcert -jarfile "$RUNNER_TEMP/app.$FORMAT" \
+                       | grep -m1 'SHA1:' | tr -d ' \t' | cut -d: -f2- | tr 'a-f' 'A-F')
+          fi
           want=$(printf '%s' "$EXPECTED" | tr -d ' \t' | tr 'a-f' 'A-F')
           echo "expected  $want"
           echo "actual    $actual"
