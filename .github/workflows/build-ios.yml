@@ -226,7 +226,6 @@ jobs:
           APP_STORAGE_SSH_KEY: ${{ secrets.APP_STORAGE_SSH_KEY }}
           APP_STORAGE_KNOWN_HOSTS: ${{ secrets.APP_STORAGE_KNOWN_HOSTS }}
           EXT: ipa
-          SRC_SHA: ${{ steps.build.outputs.src_sha }}
         run: |
           set -euo pipefail
           key="$RUNNER_TEMP/app-storage.key"
