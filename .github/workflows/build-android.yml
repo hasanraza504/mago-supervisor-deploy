@@ -33,6 +33,11 @@ on:
       ref:
         description: "Source branch/tag/SHA to build"
         default: main
+      storage:
+        description: "Artifact destination (use ssh when OneDrive is full)"
+        type: choice
+        default: onedrive
+        options: [onedrive, ssh]
       correlation:
         # Stamped into run-name so the client that dispatched this build can
         # find it again. workflow_dispatch returns 204 with no body, so without
@@ -262,7 +267,57 @@ jobs:
           fi
           echo "signing certificate matches the key Play knows"
 
+      - name: Upload to OneDrive
+        if: inputs.storage != 'ssh'
+        # The artifact goes to private cloud storage instead of GitHub Actions
+        # artifacts, which on a PUBLIC repo are downloadable by anyone. Nothing
+        # is published from this repo, so the binary needs no passphrase.
+        env:
+          RCLONE_CONF: ${{ secrets.RCLONE_CONFIG_ONEDRIVE }}
+          EXT: ${{ inputs.format }}
+          SRC_SHA: ${{ inputs.ref }}
+        run: |
+          set -euo pipefail
+          if [ -z "${RCLONE_CONF:-}" ]; then
+            echo "::error::RCLONE_CONFIG_ONEDRIVE is unset — refusing to finish with nowhere to put the build."
+            exit 1
+          fi
+          curl -fsSL https://rclone.org/install.sh | sudo bash >/dev/null 2>&1 || {
+            echo "::error::rclone install failed"; exit 1; }
+
+          # sha256 used to be produced by the (now removed) encrypt step.
+          ( cd "$RUNNER_TEMP" && sha256sum "app.${EXT}" > sha256.txt && cat sha256.txt )
+
+          conf="$RUNNER_TEMP/rclone.conf"
+          printf '%s' "$RCLONE_CONF" > "$conf"
+          chmod 600 "$conf"
+
+          # Repo is <app>-deploy; the OneDrive folder is <app>.
+          app="${GITHUB_REPOSITORY##*/}"; app="${app%-deploy}"
+          # Stamp the file so builds are self-describing in the folder listing.
+          stamp="$APP_RELEASE_STAMP"
+          name="${app}-android-${stamp}-run${GITHUB_RUN_NUMBER}.${EXT}"
+
+          rclone --config "$conf" copyto "$RUNNER_TEMP/app.${EXT}" \
+            "builds:${app}/android/${name}" --no-traverse
+          rclone --config "$conf" copyto "$RUNNER_TEMP/sha256.txt" \
+            "builds:${app}/android/${name}.sha256" --no-traverse
+          rm -f "$conf"
+
+          {
+            echo "### Build uploaded"
+            echo ""
+            echo "| | |"
+            echo "|---|---|"
+            echo "| file | \`${name}\` |"
+            echo "| OneDrive | \`/onedrive/app-builds/${app}/android/\` |"
+            echo "| source ref | \`${SRC_SHA}\` |"
+            echo "| sha256 | \`$(cut -d" " -f1 "$RUNNER_TEMP/sha256.txt")\` |"
+          } >> "$GITHUB_STEP_SUMMARY"
+          echo "uploaded ${name}"
+
       - name: Upload signed artifact to app-storage over SSH
+        if: inputs.storage == 'ssh'
         env:
           APP_STORAGE_SSH_KEY: ${{ secrets.APP_STORAGE_SSH_KEY }}
           APP_STORAGE_KNOWN_HOSTS: ${{ secrets.APP_STORAGE_KNOWN_HOSTS }}
