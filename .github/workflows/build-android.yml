@@ -148,7 +148,6 @@ jobs:
             .build[$p].credentialsSource = "local"
             | .build[$p].android = ((.build[$p].android // {}) + {buildType: (if $f == "apk" then "apk" else "app-bundle" end), credentialsSource: "local"})
           ' eas.json > eas.json.tmp && mv eas.json.tmp eas.json
-          jq ".build[\"$PROFILE\"]" eas.json
 
       - name: Build with EAS (local — consumes no EAS build credits)
         working-directory: ${{ env.SRC }}
@@ -267,7 +266,7 @@ jobs:
           fi
           echo "signing certificate matches the key Play knows"
 
-      - name: Upload to OneDrive
+      - name: Upload to private artifact storage
         if: inputs.storage != 'ssh'
         # The artifact goes to private cloud storage instead of GitHub Actions
         # artifacts, which on a PUBLIC repo are downloadable by anyone. Nothing
@@ -310,7 +309,7 @@ jobs:
             echo "| | |"
             echo "|---|---|"
             echo "| file | \`${name}\` |"
-            echo "| OneDrive | \`/onedrive/app-builds/${app}/android/\` |"
+            echo "| Private storage | \`/onedrive/app-builds/${app}/android/\` |"
             echo "| source ref | \`${SRC_SHA}\` |"
             echo "| sha256 | \`$(cut -d" " -f1 "$RUNNER_TEMP/sha256.txt")\` |"
           } >> "$GITHUB_STEP_SUMMARY"
