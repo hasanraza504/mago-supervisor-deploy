@@ -155,7 +155,6 @@ jobs:
             | .build[$p].ios = ((.build[$p].ios // {}) + {credentialsSource: "local"})
           ' eas.json > eas.json.tmp
           mv eas.json.tmp eas.json
-          jq ".build[\"$PROFILE\"]" eas.json
 
       - name: Build with EAS (local — consumes no EAS build credits)
         working-directory: ${{ env.SRC }}
@@ -226,7 +225,7 @@ jobs:
           fi
           echo "signing identity matches the certificate and profile Apple knows"
 
-      - name: Upload to OneDrive
+      - name: Upload to private artifact storage
         if: inputs.storage != 'ssh'
         # The artifact goes to private cloud storage instead of GitHub Actions
         # artifacts, which on a PUBLIC repo are downloadable by anyone. Nothing
@@ -269,7 +268,7 @@ jobs:
             echo "| | |"
             echo "|---|---|"
             echo "| file | \`${name}\` |"
-            echo "| OneDrive | \`/onedrive/app-builds/${app}/ios/\` |"
+            echo "| Private storage | \`/onedrive/app-builds/${app}/ios/\` |"
             echo "| source ref | \`${SRC_SHA}\` |"
             echo "| sha256 | \`$(cut -d" " -f1 "$RUNNER_TEMP/sha256.txt")\` |"
           } >> "$GITHUB_STEP_SUMMARY"
